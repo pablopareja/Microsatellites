@@ -28,15 +28,16 @@ public class ExtractDataToCSV {
 
     public static void main(String[] args) {
 
-        if (args.length != 3) {
-            System.out.println("This program expects 3 parameters:\n"
+        if (args.length != 4) {
+            System.out.println("This program expects 4 parameters:\n"
                     + "1. Neo4j database folder" + "\n"
                     + "2. Output filename" + "\n"
-                    + "3. Max threshold used");
+                    + "3. Tuple length" + "\n"
+                    + "4. Minimum number of tuple copies threshold" + "\n");
         } else {
 
             MicrosatellitesManager manager = null;
-            int threshold = Integer.parseInt(args[2]);
+            int minimumNumberOfCopies = Integer.parseInt(args[3]);
 
             try {
 
@@ -51,29 +52,34 @@ public class ExtractDataToCSV {
                 MicrosatelliteFoundRel microsatelliteFoundRel = new MicrosatelliteFoundRel(null);
 
                 //---looping trough all repetition length values
-                for (int i = 2; i <= threshold; i++) {
-                    
-                    System.out.println("Looking for repetitions of length " + i);
+                //for (int i = 2; i <= threshold; i++) {
 
-                    RepetitionLengthNode repetitionLengthNode = nodeRetriever.getRepetitionLengthByValue(i);
-                    if (repetitionLengthNode != null) {
+                int i = Integer.parseInt(args[2]); //tuple length
 
-                        List<RepetitionNode> repetitions = repetitionLengthNode.getRepetitions();
-                        
-                        if(repetitions.size() > 0){
-                            System.out.println("Some repetitions found!");
-                        }else{
-                            System.out.println("There are none...");
-                        }
+                System.out.println("Looking for repetitions of length " + i);
 
-                        for (RepetitionNode repetitionNode : repetitions) {
+                RepetitionLengthNode repetitionLengthNode = nodeRetriever.getRepetitionLengthByValue(i);
+                if (repetitionLengthNode != null) {
 
-                            Iterator<Relationship> relsIt = repetitionNode.getNode().getRelationships(microsatelliteFoundRel, Direction.INCOMING).iterator();
+                    List<RepetitionNode> repetitions = repetitionLengthNode.getRepetitions();
 
-                            while (relsIt.hasNext()) {
+                    if (repetitions.size() > 0) {
+                        System.out.println("Some repetitions found!");
+                    } else {
+                        System.out.println("There are none...");
+                    }
 
-                                MicrosatelliteFoundRel microSatRel = new MicrosatelliteFoundRel(relsIt.next());
-                                SequenceNode sequenceNode = new SequenceNode(microSatRel.getStartNode());
+                    for (RepetitionNode repetitionNode : repetitions) {
+
+                        Iterator<Relationship> relsIt = repetitionNode.getNode().getRelationships(microsatelliteFoundRel, Direction.INCOMING).iterator();
+
+                        while (relsIt.hasNext()) {
+
+                            MicrosatelliteFoundRel microSatRel = new MicrosatelliteFoundRel(relsIt.next());
+                            SequenceNode sequenceNode = new SequenceNode(microSatRel.getStartNode());
+
+                            if (microSatRel.getNumberOfRepetitions() >= minimumNumberOfCopies) {
+                                
                                 String microsatString = "";
                                 String tuple = repetitionNode.getString();
                                 for (int j = 0; j < microSatRel.getNumberOfRepetitions(); j++) {
@@ -87,10 +93,11 @@ public class ExtractDataToCSV {
                                         + microSatRel.getStartPosition() + "\n");
                             }
                         }
-
                     }
 
                 }
+
+                //}
 
 
 
