@@ -4,13 +4,16 @@
  */
 package com.era7.bioinfo.microsats.programs;
 
-import com.era7.bioinfo.bioinfoneo4j.Neo4jManager;
 import com.era7.bioinfo.microsats.MicrosatellitesManager;
 import com.era7.bioinfo.microsats.NodeIndexer;
 import com.era7.bioinfo.microsats.NodeRetriever;
 import com.era7.bioinfo.microsats.nodes.ProjectNode;
+import com.era7.bioinfo.microsats.nodes.RepetitionLengthNode;
+import com.era7.bioinfo.microsats.nodes.RepetitionNode;
 import com.era7.bioinfo.microsats.nodes.SequenceNode;
 import com.era7.bioinfo.microsats.relationships.MicrosatelliteFoundRel;
+import com.era7.bioinfo.microsats.relationships.ProjectSequenceRel;
+import com.era7.bioinfo.microsats.relationships.RepetitionLengthRel;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
@@ -36,6 +39,9 @@ public class CreateMicrosatellitesDB {
             MicrosatellitesManager manager = null;
             Transaction txn = null;
 
+            ProjectSequenceRel projectSequenceRel = new ProjectSequenceRel(null);
+            RepetitionLengthRel repetitionLengthRel = new RepetitionLengthRel(null);
+
             try {
 
                 int threshold = Integer.parseInt(args[1]);
@@ -45,30 +51,35 @@ public class CreateMicrosatellitesDB {
                 NodeRetriever nodeRetriever = new NodeRetriever(manager);
                 NodeIndexer nodeIndexer = new NodeIndexer(manager);
 
+                //----creating repetition length nodes-------
+                for (int i = 2; i <= threshold; i++) {
+                    RepetitionLengthNode repetitionLengthNode = new RepetitionLengthNode(manager.createNode());
+                    repetitionLengthNode.setValue(i);
+                    nodeIndexer.indexRepetitionLengthByValue(repetitionLengthNode, txn, false);
+                }
+
                 String line = null;
                 boolean first = true;
                 BufferedReader reader = new BufferedReader(new FileReader(new File(args[0])));
                 StringBuilder seqStBuilder = null;
-                
+
+                int seqCounter = 0;
+
+                String projectName = "",seqID ="" ,geneSt = "";
+                int seqLength = -1;
+
                 while ((line = reader.readLine()) != null) {
-                    
-                    if (line.startsWith(">")) {
-                        
-                        String[] columns = line.substring(1).split("\\|");
-                        String projectName = columns[0];
-                        String seqID = columns[1];
-                        String geneSt = columns[2].split("gene=")[1];
-                        int seqLength = Integer.parseInt(columns[3].split("length=")[1]);
-                                                
-                        
-                        if (!first) {        
-                            
+
+                    if (line.startsWith(">")) {                        
+
+                        if (!first) {
+
                             //creating project node if necessary
                             ProjectNode projectNode = nodeRetriever.getProjectByName(projectName);
-                            if(projectNode == null){
+                            if (projectNode == null) {
                                 projectNode = new ProjectNode(manager.createNode());
                                 projectNode.setName(projectName);
-                                nodeIndexer.indexProjectByName(projectNode,txn,true);
+                                nodeIndexer.indexProjectByName(projectNode, txn, true);
                                 txn = manager.beginTransaction();
                             }
                             //creating sequence node
@@ -77,13 +88,40 @@ public class CreateMicrosatellitesDB {
                             sequenceNode.setLength(seqLength);
                             sequenceNode.setGene(geneSt);
                             sequenceNode.setId(seqID);
-                            
-                            
+
+                            nodeIndexer.indexSequenceById(sequenceNode, txn, true);
+                            txn = manager.beginTransaction();
+
+                            projectNode.getNode().createRelationshipTo(sequenceNode.getNode(), projectSequenceRel);
+
+
+                            //---search for microsatellites----
+                            lookForMicrosatellites(sequenceNode, nodeIndexer, nodeRetriever, manager, threshold, txn, repetitionLengthRel);
+
+                            txn.success();
+                            txn.finish();
+                            txn = manager.beginTransaction();
+
                         }
                         
+                        String[] columns = line.substring(1).split("\\|");
+                        projectName = columns[0];
+                        seqID = columns[1];
+                        geneSt = columns[2].split("gene=")[1];
+                        seqLength = Integer.parseInt(columns[3].split("length=")[1]);
+
                         first = false;
                         seqStBuilder = new StringBuilder();
-                        
+
+                        seqCounter++;
+//                        if (seqCounter >= 2) {
+//                            break;
+//                        }
+                        if(seqCounter % 100 == 0){
+                            System.out.println("Current seq = " + seqID);
+                            System.out.println("seqCounter = " + seqCounter);
+                        }
+
                     } else {
                         seqStBuilder.append(line);
                     }
@@ -91,6 +129,7 @@ public class CreateMicrosatellitesDB {
 
                 reader.close();
 
+                txn.success();
 
             } catch (Exception ex) {
 
@@ -108,5 +147,68 @@ public class CreateMicrosatellitesDB {
 
         }
     }
-    
+
+    private static void lookForMicrosatellites(SequenceNode seqNode,
+            NodeIndexer nodeIndexer,
+            NodeRetriever nodeRetriever,
+            MicrosatellitesManager manager,
+            int threshold,
+            Transaction txn,
+            RepetitionLengthRel repetitionLengthRel) {
+
+
+
+        String sequence = seqNode.getSequence().toLowerCase();
+
+        for (int i = 0; i < sequence.length() - 3; i++) {
+
+            //loop for the different lengths of patterns repeated in the microsats
+            for (int j = 2; j <= threshold; j++) {
+
+                int currentPos = i;
+                int microsatRepetitions = 1;
+                boolean microSatFound = false;
+
+                if (currentPos + (j * 2) <= sequence.length()) {
+
+                    while (sequence.substring(currentPos, currentPos + j).equals(sequence.substring(currentPos + j, currentPos + (2 * j)))) {
+
+                        microsatRepetitions++;
+                        microSatFound = true;
+
+                        currentPos += j;
+
+                        if (!(currentPos + (j * 2) <= sequence.length())) {
+                            break;
+                        }
+                    }
+
+                    if (microSatFound) {
+
+                        //String microsatString = sequence.substring(i, i + (microsatRepetitions * j));
+                        String tuple = sequence.substring(i, i + j);
+
+                        RepetitionNode repetitionNode = nodeRetriever.getRepetitionByString(tuple);
+                        //----------creating repetition node if necessary--------
+                        if (repetitionNode == null) {
+                            repetitionNode = new RepetitionNode(manager.createNode());
+                            repetitionNode.setString(tuple);
+                            repetitionNode.getNode().createRelationshipTo(nodeRetriever.getRepetitionLengthByValue(j).getNode(), repetitionLengthRel);
+                            nodeIndexer.indexRepetitionByString(repetitionNode, txn, true);
+                            txn = manager.beginTransaction();
+                        }
+
+                        MicrosatelliteFoundRel microsatelliteFoundRel = new MicrosatelliteFoundRel(null);
+                        microsatelliteFoundRel = new MicrosatelliteFoundRel(seqNode.getNode().createRelationshipTo(repetitionNode.getNode(), microsatelliteFoundRel));
+                        microsatelliteFoundRel.setNumberOfRepetitions(microsatRepetitions);
+                        //---we add 1 to i for human-like coordinates---
+                        microsatelliteFoundRel.setStartPosition(i + 1);
+
+                    }
+
+                }
+            }
+        }
+
+    }
 }
